@@ -17,16 +17,17 @@ while selected_year not in [2010, 2020, 2030, 2040]:
 
 # Filter data for the selected year
 # Filter the population data for the selected year
-filtered_data = population_data[population_data['Year'] == selected_year]
+filtered_population_data = population_data[population_data['Year'] == selected_year]
 
 # Calculate the total population for the selected year
-total_population = filtered_data['Total'].sum()
+total_population = filtered_population_data['Total'].sum()
 
 # Display the total state population for the selected year
 print(f"\nTotal State Population in {selected_year}: {total_population}\n")
 
 # Get the maximum number of districts for the selected year from the projected population and apportionment data
 max_districts = estimated_districts_dict[selected_year]
+# max_districts = 2
 
 # Calculate Ideal popilation
 ideal_pop = total_population / max_districts
@@ -50,7 +51,8 @@ for j in range(len(counties_geoId)):
     model.addConstr((quicksum(x[i, j] for i in range(max_districts)) == 1), f"one_district_per_county_{j}")
 
 for i in range(max_districts):
-    model.addConstr((quicksum(x[i, j] for j in range(len(counties_geoId))) > 1, f"more_than_one_district{i}"))
+    model.addConstr(quicksum(x[i, j] for j in range(len(counties_geoId))) >= 2, name=f"more_than_one_district{i}")
+
 
 # # Add adjacency constraints
 for i in range(len(counties_geoId)):
@@ -64,6 +66,10 @@ for i in range(len(counties_geoId)):
 #         if county1 != county2:
 #             model.addConstr(districts[county1] + districts[county2] <= 1, f"adjacency_{county1}_{county2}")
 
+# Add population constraints
+for i in range(max_districts):
+    model.addConstrs((quicksum(x[i, j] * (filtered_population_data[filtered_population_data['GEOID'] == geoid]["Total"].iloc[0])) for j, geoid in enumerate(counties_geoId)) == z[i])
+
 # Set Auxiliary Variables
 model.addConstr(z_min == min_(z[i] for i in range(max_districts)), "set_z_min")
 model.addConstr(z_max == max_(z[i] for i in range(max_districts)), "set_z_max")
@@ -73,7 +79,9 @@ model.optimize()
 
 # Check if the model is feasible
 if model.status == GRB.OPTIMAL:
-
+    for var in x:
+        print(f"District: {var[0]}, GEOID: {counties_geoId[var[1]]}, In district?:  {x[var].x}")
+    
     for v in model.getVars():
         print(f"{v.varName}: {v.x}")
 else:
