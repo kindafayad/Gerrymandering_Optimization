@@ -26,8 +26,8 @@ total_population = filtered_population_data['Total'].sum()
 print(f"\nTotal State Population in {selected_year}: {total_population}\n")
 
 # Get the maximum number of districts for the selected year from the projected population and apportionment data
-# max_districts = estimated_districts_dict[selected_year]
-max_districts = 2
+max_districts = estimated_districts_dict[selected_year]
+# max_districts = 2
 
 # Calculate Ideal popilation
 ideal_pop = total_population / max_districts
@@ -68,7 +68,7 @@ for i in range(len(counties_geoId)):
 
 # Add population constraints
 for i in range(max_districts):
-    model.addConstrs((quicksum(x[i, j] * (filtered_population_data[filtered_population_data['GEOID'] == geoid]["Total"].iloc[0])) for j, geoid in enumerate(counties_geoId)) == z[i], "population_districts_must_equal_sum_county_populations")
+    model.addConstr(quicksum(x[i, j] * (filtered_population_data[filtered_population_data['GEOID'] == geoid]["Total"].iloc[0]) for j, geoid in enumerate(counties_geoId)) == z[i], f"district_{i}_pop_equals_aggregate_county_pop")
 
 # Set Auxiliary Variables
 model.addConstr(z_min == min_(z[i] for i in range(max_districts)), "set_z_min")
