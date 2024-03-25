@@ -9,8 +9,9 @@ from population import population_data
 
 #Assumptions:
 # Only two parties
-percent_offset_lb = 0.50
-percent_offset_ub = 1.50
+offset = 0.5
+percent_offset_lb = 1 - offset
+percent_offset_ub = 1 + offset
 
 # selected_year = int(input("Please select a year (2010, 2020, 2030, 2040): "))
 # while selected_year not in [2010, 2020, 2030, 2040]:
@@ -43,8 +44,8 @@ def run_model(district_numb):
     x = model.addVars(district_numb, len(counties_geoId), vtype=GRB.BINARY, name="x")
 
     # District population per district
-    z = model.addVars(district_numb, vtype=GRB.INTEGER, name="z")
-    # z = model.addVars(district_numb, vtype=GRB.INTEGER, ub=(ideal_pop * percent_offset_ub), lb=(ideal_pop * percent_offset_lb), name="z")
+    # z = model.addVars(district_numb, vtype=GRB.INTEGER, name="z")
+    z = model.addVars(district_numb, vtype=GRB.INTEGER, ub=(ideal_pop * percent_offset_ub), lb=(ideal_pop * percent_offset_lb), name="z")
     z_min = model.addVar(vtype=GRB.INTEGER, name="z_min")
     z_max = model.addVar(vtype=GRB.INTEGER, name="z_max")
 
@@ -60,11 +61,16 @@ def run_model(district_numb):
 
 
     # Add adjacency constraints
-    for i in range(len(counties_geoId)):
-        for j in range(len(counties_geoId)):
-            if check_county_adjacency(counties_geoId[i], counties_geoId[j]):
-                for k in range(district_numb):
-                    model.addConstr(quicksum([x[k, i], x[k, j]]) == 2 , f"Contiguity_{i}_{j}_{k}")
+    # for k in range(district_numb):
+    #     for i in range(len(counties_geoId)):
+    #         for j in range(len(counties_geoId)):
+    #             if check_county_adjacency(counties_geoId[i], counties_geoId[j]):
+    #                 model.addConstr(x[k, i] + x[k, j] <= 2, f"Contiguity_{i}_{j}_{k}")
+
+
+    for k in range(district_numb):
+        for i in range(len(counties_geoId)):
+            model.addConstr(quicksum(x[k, j] * check_county_adjacency(counties_geoId[i], counties_geoId[j]) for j in range(len(counties_geoId))) <= 1, f"Contiguity_{i}_{k}")
 
     # Add population constraints
     for i in range(district_numb):
@@ -74,24 +80,31 @@ def run_model(district_numb):
     model.addGenConstrMin(z_min, z, name="set_z_min")
     model.addGenConstrMax(z_max, z, name="set_z_max")
 
-    # model.addConstr(z_min == min_(z[i] for i in range(district_numb)), "set_z_min")
-    # model.addConstr(z_max == max_(z[i] for i in range(district_numb)), "set_z_max")
-
     # Optimize the model
     model.optimize()
 
     # Check if the model is feasible
     if model.status == GRB.OPTIMAL:
         print("Optimal solution found.")
-        for var in x:
-            print(f"District: {var[0]}, GEOID: {counties_geoId[var[1]]}, In district?:  {x[var].x}")
-        
-        for v in model.getVars():
-            print(f"{v.varName}: {v.x}")
+
+        for i in range(district_numb):
+            outputDf = pd.DataFrame(columns=["County_Name", "County_GEOID", "Population"])
+
+            print(f"District {i} Population: {z[i].x}")
+            for j in range(len(counties_geoId)):
+                if x[i, j].x: 
+                    outputDf = outputDf._append({"County_Name": filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[j]]["County"].iloc[0], "County_GEOID": counties_geoId[j], "Population": int(filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[j]]["Total"].iloc[0])}, ignore_index=True)
+
+            print(outputDf)
+            print("-------------------")
+    
+
+        print(z_min.x)
+        print(z_max.x)
     else:
         print("No feasible solution found.")
 
-for i in range (7, 8, 1):
+for i in range (8, 10, 1):
     print(f"Running model for iteration {i}")
     run_model(i)
     # time.sleep(3)
