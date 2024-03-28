@@ -8,9 +8,9 @@ from population import population_data
 
 #Assumptions:
 # Only two parties
-offset = 1
-percent_offset_lb = 1 - offset
-percent_offset_ub = 1 + offset
+# offset = 1
+# percent_offset_lb = 1 - offset
+# percent_offset_ub = 1 + offset
 
 # selected_year = int(input("Please select a year (2010, 2020, 2030, 2040): "))
 # while selected_year not in [2010, 2020, 2030, 2040]:
@@ -35,7 +35,7 @@ print(f"\nTotal State Population in {selected_year}: {total_population}\n")
 
 def run_model(max_districts: int = 100, min_districts:int = 1):
     # Calculate Ideal popilation
-    ideal_pop = total_population / max_districts
+    # ideal_pop = total_population / max_districts
 
     # Create a MILP Gurobi model
     model = Model("gerrymandering_model")
@@ -52,7 +52,8 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
     A = model.addVars(len(counties_geoId), len(counties_geoId), vtype=GRB.BINARY, name="A")
 
     # District population per district
-    z = model.addVars(max_districts, vtype=GRB.INTEGER, ub=(ideal_pop * percent_offset_ub), lb=(ideal_pop * percent_offset_lb), name="z")
+    z = model.addVars(max_districts, vtype=GRB.INTEGER, name="z")
+    # z = model.addVars(max_districts, vtype=GRB.INTEGER, ub=(ideal_pop * percent_offset_ub), lb=(ideal_pop * percent_offset_lb), name="z")
     z_min = model.addVar(vtype=GRB.INTEGER, name="z_min")
     z_max = model.addVar(vtype=GRB.INTEGER, name="z_max")
 
@@ -60,7 +61,17 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
     model.setObjective(z_max - z_min, GRB.MINIMIZE)
 
     # Add constraints
+    # Constraints for districts existing based on variable e (e stands for district exist)
     model.addConstr(quicksum(e[k] for k in range(max_districts)) >= min_districts, "minimum district_constraint")
+    for k in range(max_districts):
+        for i in range(len(counties_geoId)):
+            for j in range(len(counties_geoId)):
+                model.addConstr(x[i, j, k] <= e[k], f"district_existence_{k}_{i}_{j}")
+
+    for k in range(max_districts):
+        for i in range(len(counties_geoId)):
+            model.addConstr(y[i, k] <= e[k], f"district_existence_{k}_{i}")
+
 
     # Add constraints to ensure each county is assigned to exactly one district
     for i in range(len(counties_geoId)):
