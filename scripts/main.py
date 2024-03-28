@@ -63,6 +63,7 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
     # Add constraints
     # Constraints for districts existing based on variable e (e stands for district exist)
     model.addConstr(quicksum(e[k] for k in range(max_districts)) >= min_districts, "minimum district_constraint")
+
     for k in range(max_districts):
         for i in range(len(counties_geoId)):
             for j in range(len(counties_geoId)):
@@ -72,6 +73,8 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
         for i in range(len(counties_geoId)):
             model.addConstr(y[i, k] <= e[k], f"district_existence_{k}_{i}")
 
+    for k in range(max_districts):
+        model.addConstr(z[k] <= e[k] * z_max, f"district_existence_{k}")
 
     # Add constraints to ensure each county is assigned to exactly one district
     for i in range(len(counties_geoId)):
@@ -79,22 +82,22 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
 
 
     # Add adjacency matrix constraints
-    # for i in range(len(counties_geoId)):
-    #     for j in range(len(counties_geoId)):
-    #         model.addConstr(A[i, j] == check_county_adjacency(counties_geoId[i], counties_geoId[j]))
+    for i in range(len(counties_geoId)):
+        for j in range(len(counties_geoId)):
+            model.addConstr(A[i, j] == check_county_adjacency(counties_geoId[i], counties_geoId[j]))
                 
     # Add constraint to ensure that counties are adjacent and also ensure that the county is assigned to the district
     # x(i,j,k) <= z(i,k)
     # x(i,j,k) <= z(j,k)
     # x(i,j,k) >= z(i,k) + z(j,k) - 1
     # x(i,j,k) <= A(i,j)     
-    for i in range(len(counties_geoId)):
-        for j in range(len(counties_geoId)):
-            for k in range(max_districts):
-                model.addConstr(x[i, j, k] <= y[i, k], f"county_assignment_{i}_{j}_{k}")
-                model.addConstr(x[i, j, k] <= y[j, k], f"county_assignment_{i}_{j}_{k}")
-                model.addConstr(x[i, j, k] >= y[i, k] + y[j, k] - 1, f"county_assignment_{i}_{j}_{k}")
-                model.addConstr(x[i, j, k] <= A[i, j], f"county_assignment_{i}_{j}_{k}")
+    # for i in range(len(counties_geoId)):
+    #     for j in range(len(counties_geoId)):
+    #         for k in range(max_districts):
+    #             model.addConstr(x[i, j, k] <= y[i, k], f"county_assignment_{i}_{j}_{k}")
+    #             model.addConstr(x[i, j, k] <= y[j, k], f"county_assignment_{i}_{j}_{k}")
+    #             model.addConstr(x[i, j, k] >= y[i, k] + y[j, k] - 1, f"county_assignment_{i}_{j}_{k}")
+    #             model.addConstr(x[i, j, k] <= A[i, j], f"county_assignment_{i}_{j}_{k}")
 
     # Add constraints to ensure that the total population of each district is within the specified bounds (z_min, z_max) 
     # This has already been set in ub and lb
