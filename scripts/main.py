@@ -33,7 +33,7 @@ print(f"\nTotal State Population in {selected_year}: {total_population}\n")
 # max_districts = 10
 
 
-def run_model(max_districts: int = 100, min_districts:int = 1):
+def run_model(max_districts: int = 92, min_districts:int = 1):
     # Calculate Ideal popilation
     # ideal_pop = total_population / max_districts
 
@@ -52,17 +52,21 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
     A = model.addVars(len(counties_geoId), len(counties_geoId), vtype=GRB.BINARY, name="A")
 
     # District population per district
-    z = model.addVars(max_districts, vtype=GRB.INTEGER, name="z")
+    # z = model.addVars(max_districts, vtype=GRB.INTEGER, name="z")
     # z = model.addVars(max_districts, vtype=GRB.INTEGER, ub=(ideal_pop * percent_offset_ub), lb=(ideal_pop * percent_offset_lb), name="z")
-    z_min = model.addVar(vtype=GRB.INTEGER, name="z_min")
-    z_max = model.addVar(vtype=GRB.INTEGER, name="z_max")
+    # z_min = model.addVar(vtype=GRB.INTEGER, name="z_min")
+    # z_max = model.addVar(vtype=GRB.INTEGER, name="z_max")
 
     # Set objective function
-    model.setObjective(z_max - z_min, GRB.MINIMIZE)
+    model.setObjective(1, GRB.MINIMIZE)
 
     # Add constraints
     # Constraints for districts existing based on variable e (e stands for district exist)
     model.addConstr(quicksum(e[k] for k in range(max_districts)) >= min_districts, "minimum district_constraint")
+
+    for k in range(max_districts):
+        model.addConstr(e[k] <= quicksum(y[i, k] for i in range(len(counties_geoId))), f"district_existence_{k}")
+
 
     for k in range(max_districts):
         for i in range(len(counties_geoId)):
@@ -73,8 +77,8 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
         for i in range(len(counties_geoId)):
             model.addConstr(y[i, k] <= e[k], f"district_existence_{k}_{i}")
 
-    for k in range(max_districts):
-        model.addConstr(z[k] <= e[k] * z_max, f"district_existence_{k}")
+    # for k in range(max_districts):
+    #     model.addConstr(z[k] <= e[k] * z_max, f"district_existence_{k}")
 
     # Add constraints to ensure each county is assigned to exactly one district
     for i in range(len(counties_geoId)):
@@ -91,25 +95,25 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
     # x(i,j,k) <= z(j,k)
     # x(i,j,k) >= z(i,k) + z(j,k) - 1
     # x(i,j,k) <= A(i,j)     
-    # for i in range(len(counties_geoId)):
-    #     for j in range(len(counties_geoId)):
-    #         for k in range(max_districts):
-    #             model.addConstr(x[i, j, k] <= y[i, k], f"county_assignment_{i}_{j}_{k}")
-    #             model.addConstr(x[i, j, k] <= y[j, k], f"county_assignment_{i}_{j}_{k}")
-    #             model.addConstr(x[i, j, k] >= y[i, k] + y[j, k] - 1, f"county_assignment_{i}_{j}_{k}")
-    #             model.addConstr(x[i, j, k] <= A[i, j], f"county_assignment_{i}_{j}_{k}")
+    for i in range(len(counties_geoId)):
+        for j in range(len(counties_geoId)):
+            for k in range(max_districts):
+                model.addConstr(x[i, j, k] <= y[i, k], f"county_assignment_{i}_{j}_{k}")
+                model.addConstr(x[i, j, k] <= y[j, k], f"county_assignment_{i}_{j}_{k}")
+                model.addConstr(x[i, j, k] >= y[i, k] + y[j, k] - 1, f"county_assignment_{i}_{j}_{k}")
+                model.addConstr(x[i, j, k] <= A[i, j], f"county_assignment_{i}_{j}_{k}")
 
     # Add constraints to ensure that the total population of each district is within the specified bounds (z_min, z_max) 
     # This has already been set in ub and lb
                 
     # Add constraint to ensure that population of each district is within the specified bounds (z_min, z_max)
-    for k in range(max_districts):
-        model.addConstr(z[k] == quicksum(y[i, k] * int(filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[i]]["Total"].iloc[0]) for i in range(len(counties_geoId))), f"district_population_{k}")
+    # for k in range(max_districts):
+    #     model.addConstr(z[k] == quicksum(y[i, k] * int(filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[i]]["Total"].iloc[0]) for i in range(len(counties_geoId))), f"district_population_{k}")
 
     # Set Auxiliary Variables
     # will set to min and max of z
-    model.addGenConstrMin(z_min, z, name="set_z_min")
-    model.addGenConstrMax(z_max, z, name="set_z_max")
+    # model.addGenConstrMin(z_min, z, name="set_z_min")
+    # model.addGenConstrMax(z_max, z, name="set_z_max")
 
     # Optimize the model
     model.optimize()
@@ -118,10 +122,13 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
     if model.status == GRB.OPTIMAL:
         print("Optimal solution found.")
 
+        for i in range(max_districts):
+            print(f"{e[i].varName}: {e[i].x}")
+
         for k in range(max_districts):
             outputDf = pd.DataFrame(columns=["County_Name", "County_GEOID", "Population"])
 
-            print(f"District {k} Population: {z[k].x}")
+            print(f"District {k} Population:")
             for i in range(len(counties_geoId)):
                 if y[i, k].x: 
                     outputDf = outputDf._append({"County_Name": filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[i]]["County"].iloc[0], "County_GEOID": counties_geoId[i], "Population": int(filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[i]]["Total"].iloc[0])}, ignore_index=True)
@@ -130,8 +137,8 @@ def run_model(max_districts: int = 100, min_districts:int = 1):
             print("--------------------------------------------------------------------\n")
     
 
-        print(z_min.x)
-        print(z_max.x)
+        # print(z_min.x)
+        # print(z_max.x)
     else:
         print("No feasible solution found.")
 
