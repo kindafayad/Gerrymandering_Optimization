@@ -1,1 +1,0 @@
-# Gerrymandering_Optimization
