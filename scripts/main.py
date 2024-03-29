@@ -1,131 +1,124 @@
 import pandas as pd
-from gurobipy import Model, GRB, quicksum, min_, max_
-import time
+from gurobipy import Model, GRB, quicksum
 
-from apportionment import estimated_districts_dict
-from county_adjacency import check_county_adjacency, counties_geoId
-from population import population_data
+# Prompt user for the year and number of districts
+years = [2010, 2015, 2025, 2030, 2035, 2040, 2050]
+year = int(input(f"Enter the year {years}: "))
+while year not in years:
+    year = int(input(f"Invalid year. Please enter a year from {years}: "))
+d = int(input("Enter the number of districts: "))
 
-print(check_county_adjacency(18145, 18081))
-#Assumptions:
-# Only two parties
-offset = 1
-percent_offset_lb = 1 - offset
-percent_offset_ub = 1 + offset
+# Load the population data
+population_data_path = "data/downloaded_data/Population_Data.csv"
+population_data = pd.read_csv(population_data_path)
 
-# selected_year = int(input("Please select a year (2010, 2020, 2030, 2040): "))
-# while selected_year not in [2010, 2020, 2030, 2040]:
-    # selected_year = int(input("Invalid selection. Please choose a valid year: "))
-selected_year = 2010
+# Load the adjacency matrix
+adjacency_matrix_path = "data/County_Adjacency_Matrix.csv"
+adjacency_matrix = pd.read_csv(adjacency_matrix_path)
 
-# Filter data for the selected year
-# Filter the population data for the selected year
-filtered_population_data = population_data[population_data['Year'] == selected_year]
+# Preprocessing the population data for the selected year
+selected_year_population_data = population_data[population_data['Year'] == year]
+simplified_population_data = selected_year_population_data[['GEOID', 'Total']].copy()
+simplified_population_data['Total'] = simplified_population_data['Total'].str.replace(',', '').astype(int)
 
-# Calculate the total population for the selected year
-total_population = filtered_population_data['Total'].sum()
+# Adjusting and aligning the adjacency matrix with the population data's GEOIDs
+adjacency_matrix_cleaned = adjacency_matrix.set_index('Unnamed: 0')
+adjacency_matrix_cleaned.index = adjacency_matrix_cleaned.index.astype(int)
+adjacency_matrix_cleaned.columns = adjacency_matrix_cleaned.columns.astype(int)
 
-# Display the total state population for the selected year
-print(f"\nTotal State Population in {selected_year}: {total_population}\n")
+common_geoids = list(set(simplified_population_data['GEOID']).intersection(set(adjacency_matrix_cleaned.index)))
+simplified_population_data = simplified_population_data[simplified_population_data['GEOID'].isin(common_geoids)]
+simplified_population_data.reset_index(drop=True, inplace=True)
+adjacency_matrix_aligned = adjacency_matrix_cleaned.loc[common_geoids, common_geoids]
 
-# Get the maximum number of districts for the selected year from the projected population and apportionment data
-# district_numb = estimated_districts_dict[selected_year]
+# Convert the aligned adjacency matrix to a numpy array for the Gurobi model
+A = adjacency_matrix_aligned.to_numpy()
 
-# district_numb = 10
+# Initialize the Gurobi model
+model = Model("Redistricting")
+n = len(simplified_population_data)  # Number of counties
 
+# Decision variables: x[i, j] = 1 if county i is assigned to district j
+x = model.addVars(n, d, vtype=GRB.BINARY, name="assignment")
 
-def run_model(district_numb):
-    # Calculate Ideal popilation
-    ideal_pop = total_population / district_numb
+# Variable for each district's population
+district_pops = model.addVars(d, vtype=GRB.INTEGER, name="district_pop")
 
-    # Create a MILP Gurobi model
-    model = Model("gerrymandering_model")
+# Calculate the total population and average district population
+total_population = sum(simplified_population_data['Total'])
+average_population = total_population / d
 
+# Assignment constraint for each county to be assigned to one district
+for i in range(n):
+    model.addConstr(quicksum(x[i, j] for j in range(d)) == 1, name=f"county_assignment_{i}")
 
-# Create variables    
-# variables for counties and districts
-    x = model.addVars(len(counties_geoId), len(counties_geoId), district_numb, vtype=GRB.BINARY, name="x")
-    y = model.addVars(len(counties_geoId), district_numb, vtype=GRB.BINARY, name="y")
-    A = model.addVars(len(counties_geoId), len(counties_geoId), vtype=GRB.BINARY, name="A")
+# Constraints to calculate the population of each district
+for j in range(d):
+    model.addConstr(district_pops[j] == quicksum(x[i, j] * simplified_population_data.loc[i, 'Total'] for i in range(n)), name=f"pop_district_{j}")
 
-    # District population per district
-    z = model.addVars(district_numb, vtype=GRB.INTEGER, ub=(ideal_pop * percent_offset_ub), lb=(ideal_pop * percent_offset_lb), name="z")
-    z_min = model.addVar(vtype=GRB.INTEGER, name="z_min")
-    z_max = model.addVar(vtype=GRB.INTEGER, name="z_max")
+# Auxiliary variables and constraints for absolute deviations
+abs_devs = model.addVars(d, vtype=GRB.INTEGER, name="abs_devs")
+for j in range(d):
+    model.addConstr(abs_devs[j] >= district_pops[j] - average_population, name=f"dev_pos_{j}")
+    model.addConstr(abs_devs[j] >= -(district_pops[j] - average_population), name=f"dev_neg_{j}")
 
-    # Set objective function
-    model.setObjective(z_max - z_min, GRB.MINIMIZE)
+# Objective: Minimize the sum of absolute deviations from the average population
+model.setObjective(quicksum(abs_devs[j] for j in range(d)), GRB.MINIMIZE)
 
-    # Add constraints
-    # Add constraints to ensure each district exists (one or more counties in the district)
-    for k in range(district_numb):
-        model.addConstr(quicksum(y[i, k] for i in range(len(counties_geoId))) >= 1, f"district_existence_{k}")
+# Contiguity constraints to ensure districts are connected
+for k in range(d):
+    for i in range(n):
+        neighbors = [j for j in range(n) if A[i, j] == 1]
+        if neighbors:  # If county i has neighbors
+            model.addConstr(x[i, k] <= quicksum(x[j, k] for j in neighbors), name=f"contiguity_{i}_{k}")
 
-    # Add constraints to ensure each county is assigned to exactly one district
-    for i in range(len(counties_geoId)):
-        model.addConstr(quicksum(y[i, k] for k in range(district_numb)) == 1, f"county_assignment_{i}")
+# Adjacency constraint: Ensure counties in the same district are adjacent
+for k in range(d):
+    for i in range(n):
+        for j in range(n):
+            if i != j and A[i, j] == 0:  # Non-adjacent counties
+                model.addConstr(x[i, k] + x[j, k] <= 1, name=f"non_adj_{i}_{j}_{k}")
 
+# Setting a time limit for the optimization
+model.Params.TimeLimit = 60
 
-    # Add adjacency matrix constraints
-    for i in range(len(counties_geoId)):
-        for j in range(len(counties_geoId)):
-            model.addConstr(A[i, j] == check_county_adjacency(counties_geoId[i], counties_geoId[j]))
+# Solve the optimization model
+model.optimize()
 
+# Assuming the optimization model has been solved
 
-                
-
-                
-
-    # Add constraint to ensure that counties are adjacent and also ensure that the county is assigned to the district
-    # x(i,j,k) <= z(i,k)
-    # x(i,j,k) <= z(j,k)
-    # x(i,j,k) >= z(i,k) + z(j,k) - 1
-    # x(i,j,k) <= A(i,j)     
-    for i in range(len(counties_geoId)):
-        for j in range(len(counties_geoId)):
-            for k in range(district_numb):
-                model.addConstr(x[i, j, k] <= y[i, k], f"county_assignment_{i}_{j}_{k}")
-                model.addConstr(x[i, j, k] <= y[j, k], f"county_assignment_{i}_{j}_{k}")
-                model.addConstr(x[i, j, k] >= y[i, k] + y[j, k] - 1, f"county_assignment_{i}_{j}_{k}")
-                model.addConstr(x[i, j, k] <= A[i, j], f"county_assignment_{i}_{j}_{k}")
-
-    # Add constraints to ensure that the total population of each district is within the specified bounds (z_min, z_max) 
-    # This has already been set in ub and lb
-                
-    # Add constraint to ensure that population of each district is within the specified bounds (z_min, z_max)
-    for k in range(district_numb):
-        model.addConstr(z[k] == quicksum(y[i, k] * int(filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[i]]["Total"].iloc[0]) for i in range(len(counties_geoId))), f"district_population_{k}")
-
-    # Set Auxiliary Variables
-    # will set to min and max of z
-    model.addGenConstrMin(z_min, z, name="set_z_min")
-    model.addGenConstrMax(z_max, z, name="set_z_max")
-
-    # Optimize the model
-    model.optimize()
-
-    # Check if the model is feasible
-    if model.status == GRB.OPTIMAL:
-        print("Optimal solution found.")
-
-        for k in range(district_numb):
-            outputDf = pd.DataFrame(columns=["County_Name", "County_GEOID", "Population"])
-
-            print(f"District {k} Population: {z[k].x}")
-            for i in range(len(counties_geoId)):
-                if y[i, k].x: 
-                    outputDf = outputDf._append({"County_Name": filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[i]]["County"].iloc[0], "County_GEOID": counties_geoId[i], "Population": int(filtered_population_data[filtered_population_data['GEOID'] == counties_geoId[i]]["Total"].iloc[0])}, ignore_index=True)
-
-            print(outputDf)
-            print("--------------------------------------------------------------------\n")
+if model.status == GRB.OPTIMAL or model.status == GRB.TIME_LIMIT:
+    print("Optimal solution found.\n")
+    district_info = {j: {'details': [], 'population': 0} for j in range(d)}
     
+    for i in range(n):
+        for j in range(d):
+            if x[i, j].X > 0.5:  # If county i is assigned to district j
+                geo_id = simplified_population_data.iloc[i]['GEOID']
+                county_name = selected_year_population_data[selected_year_population_data['GEOID'] == geo_id]['County'].values[0]
+                county_population = simplified_population_data.iloc[i]['Total']
+                district_info[j]['details'].append((geo_id, county_name, county_population))
+                district_info[j]['population'] += county_population
 
-        print(z_min.x)
-        print(z_max.x)
-    else:
-        print("No feasible solution found.")
+    print("\n")  # Skip a line before printing variance information
 
-for i in range (7, 12, 1):
-    print(f"Running model for iteration {i}")
-    run_model(i)
-    # time.sleep(3)
+    # Calculating and printing the variance of district populations
+    district_populations = [district_info[j]['population'] for j in range(d)]
+    mean_population = round(sum(district_populations) / d, 2)  # Rounded
+    variance_population = round(sum((x - mean_population) ** 2 for x in district_populations) / d, 2)  # Rounded
+    
+    # Calculating variance percentage
+    variance_percentage = round((variance_population / mean_population) * 100, 2)
+    
+    print(f"Mean District Population: {mean_population}")
+    print(f"Variance of District Populations: {variance_population}")
+    print(f"Variance Percentage: {variance_percentage}%\n")  # Printing variance percentage
+
+    # Print the output for each district
+    for j in district_info:
+        print(f"District Number: {j + 1}, Total Population: {district_info[j]['population']}")
+        for detail in district_info[j]['details']:
+            print(f"GEOID {detail[0]}, County {detail[1]}, Population {detail[2]}")
+        print()  # New line for better readability
+else:
+    print("No optimal solution found within the time limit.")
